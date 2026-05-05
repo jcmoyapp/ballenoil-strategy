@@ -1,0 +1,31 @@
+name: Backfill Histórico (ejecutar una vez)
+
+on:
+  workflow_dispatch:
+    inputs:
+      desde:
+        description: 'Fecha inicio (YYYY-MM-DD)'
+        required: false
+        default: '2025-01-01'
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Importar histórico desde Wayback Machine
+        run: python3 .github/scripts/backfill_history.py "${{ github.event.inputs.desde }}"
+
+      - name: Guardar cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/historico_precios.json
+          git diff --staged --quiet || git commit -m "backfill: histórico desde ${{ github.event.inputs.desde }}"
+          git push
