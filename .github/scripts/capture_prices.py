@@ -21,11 +21,11 @@ BRANDS = {
     'alcampo':       {'brands': ['ALCAMPO'],                  'exact': False},
     'galp':          {'brands': ['GALP'],                     'exact': True },
     'galp_energia':  {'brands': ['GALP ENERGIA'],             'exact': True },
-    'repsol':        {'brands': ['REPSOL'],                   'exact': False},
+    'repsol':        {'brands': ['REPSOL', 'CAMPSA'],         'exact': False},
     'bp':            {'brands': ['BP'],                       'exact': False},
     'shell':         {'brands': ['SHELL'],                    'exact': True },
     'shell_express': {'brands': ['SHELL EXPRESS'],            'exact': True },
-    'moeve':         {'brands': ['MOEVE', 'CEPSA', 'CAMPSA'], 'exact': False},
+    'moeve':         {'brands': ['MOEVE', 'CEPSA'], 'exact': False},
 }
 
 
