@@ -1,6 +1,6 @@
 """
 Captura precios del Ministerio de Energía y añade snapshot a data/historico_precios.json
-Corre en GitHub Actions dos veces al día (9h y 15h hora Madrid).
+Corre en GitHub Actions cada 5 minutos.
 """
 import json
 import os
@@ -9,6 +9,12 @@ import urllib.request
 from datetime import datetime, timezone
 
 HISTORICO_PATH = 'data/historico_precios.json'
+# Snapshot por estación (último precio visto, para poder detectar cambios) y eventos de
+# cambio de precio por estación — esto corre en GitHub Actions cada 30 min, así que a
+# diferencia del histórico local del navegador NO depende de que nadie tenga la app abierta.
+STATION_SNAPSHOT_PATH = 'data/estaciones_snapshot.json'
+STATION_EVENTS_PATH   = 'data/estaciones_eventos.json'
+STATION_EVENTS_MAX_AGE_DAYS = 60
 API_URL = 'https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/'
 
 # Mismas marcas que BPP_GROUPS en la app
@@ -25,7 +31,7 @@ BRANDS = {
     'bp':            {'brands': ['BP'],                       'exact': False},
     'shell':         {'brands': ['SHELL'],                    'exact': True },
     'shell_express': {'brands': ['SHELL EXPRESS'],            'exact': True },
-    'moeve':         {'brands': ['MOEVE', 'CEPSA'], 'exact': False},
+    'moeve':         {'brands': ['MOEVE', 'CEPSA'],           'exact': False},
 }
 
 
@@ -77,6 +83,65 @@ def save_historico(snapshots):
         json.dump({'v': 1, 'snapshots': snapshots}, f, ensure_ascii=False, separators=(',', ':'))
 
 
+def load_station_snapshot():
+    if not os.path.exists(STATION_SNAPSHOT_PATH):
+        return {}
+    with open(STATION_SNAPSHOT_PATH, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def save_station_snapshot(snap):
+    os.makedirs('data', exist_ok=True)
+    with open(STATION_SNAPSHOT_PATH, 'w', encoding='utf-8') as f:
+        json.dump(snap, f, ensure_ascii=False, separators=(',', ':'))
+
+
+def load_station_events():
+    if not os.path.exists(STATION_EVENTS_PATH):
+        return []
+    with open(STATION_EVENTS_PATH, 'r', encoding='utf-8') as f:
+        return json.load(f).get('events', [])
+
+
+def save_station_events(events):
+    os.makedirs('data', exist_ok=True)
+    with open(STATION_EVENTS_PATH, 'w', encoding='utf-8') as f:
+        json.dump({'v': 1, 'events': events}, f, ensure_ascii=False, separators=(',', ':'))
+
+
+def detect_station_events(lista, ts):
+    """Compara el precio de cada estación (de las marcas seguidas) contra el último
+    snapshot conocido y genera un evento por cada cambio real de precio. La primera vez
+    que se ve una estación solo se guarda su precio (sin generar un evento falso)."""
+    prev_snapshot = load_station_snapshot()
+    new_snapshot  = dict(prev_snapshot)
+    events = []
+    for s in lista:
+        rotulo = s.get('Rótulo', '') or ''
+        brand_id = next((bid for bid, cfg in BRANDS.items() if match_brand(cfg, rotulo)), None)
+        if not brand_id:
+            continue
+        ideess = s.get('IDEESS')
+        if not ideess:
+            continue
+        curr = {'ga': parse_price(s.get('Precio Gasoleo A')), 'g95': parse_price(s.get('Precio Gasolina 95 E5'))}
+        prev = prev_snapshot.get(ideess)
+        if prev:
+            for fuel in ('ga', 'g95'):
+                op, np = prev.get(fuel), curr.get(fuel)
+                if op is not None and np is not None and abs(np - op) > 0.0005:
+                    events.append({'pollTs': ts, 'stationId': ideess, 'brand': rotulo, 'fuel': fuel, 'oldPrice': op, 'newPrice': np})
+        new_snapshot[ideess] = curr
+    save_station_snapshot(new_snapshot)
+
+    existing = load_station_events()
+    cutoff = ts - STATION_EVENTS_MAX_AGE_DAYS * 24 * 3600 * 1000
+    existing = [e for e in existing if e['pollTs'] >= cutoff]
+    existing.extend(events)
+    save_station_events(existing)
+    return events
+
+
 def main():
     print('Descargando precios del Ministerio…')
     try:
@@ -105,6 +170,14 @@ def main():
     now_utc = datetime.now(timezone.utc)
     today   = now_utc.strftime('%Y-%m-%d')
     ts      = int(now_utc.timestamp() * 1000)
+
+    # La detección de eventos por estación corre SIEMPRE, en cada ejecución (cada 5 min) —
+    # independiente del guard de abajo, que solo controla cada cuánto se guarda un nuevo
+    # snapshot de MEDIAS por marca (eso sí puede seguir siendo menos frecuente sin perder
+    # precisión, ya que la media apenas se mueve de una ejecución a la siguiente).
+    station_events = detect_station_events(lista, ts)
+    if station_events:
+        print(f'  {len(station_events)} cambios de precio por estación detectados')
 
     snap = {'ts': ts, 'date': today, 'brands': brands_out}
 
